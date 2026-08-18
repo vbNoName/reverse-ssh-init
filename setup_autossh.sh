@@ -70,9 +70,10 @@ else
 fi
 
 # ── 2. Остановка текущего туннеля ───────────────────────────────────────────
-if [ -x /etc/init.d/autossh ]; then
+if [ -f /etc/init.d/autossh ]; then
     echo "🔄 Останавливаю текущую службу autossh..."
-    /etc/init.d/autossh stop >/dev/null 2>&1 || true
+    service autossh stop >/dev/null 2>&1 || true
+    pkill autossh >/dev/null 2>&1 || true
 fi
 
 # ── 3. SSH-ключ ─────────────────────────────────────────────────────────────
@@ -139,7 +140,7 @@ case "$SERVER_PUBKEY" in
         uci -q set dropbear.@dropbear[0].PasswordAuth='on' || true
         uci -q set dropbear.@dropbear[0].RootPasswordAuth='on' || true
         uci -q commit dropbear || true
-        /etc/init.d/dropbear reload >/dev/null 2>&1 || true
+        service dropbear reload >/dev/null 2>&1 || true
         echo "  ✔ Вход по паролю оставлен включённым"
         ;;
     *)
@@ -171,8 +172,8 @@ wait "$DB_PID" 2>/dev/null || true
 
 # ── 8. Запуск службы ────────────────────────────────────────────────────────
 echo "▶️  Включаю автозапуск и запускаю autossh..."
-/etc/init.d/autossh enable >/dev/null 2>&1 || true
-/etc/init.d/autossh restart
+service autossh enable
+service autossh start
 
 sleep 3
 if pgrep autossh >/dev/null 2>&1; then
@@ -195,6 +196,6 @@ echo "  Если публичный ключ сервера был добавл�
 echo "  иначе роутер спросит пароль root (вход по паролю остаётся включённым)."
 echo
 echo "  Полезные команды на роутере:"
-echo "    /etc/init.d/autossh restart    — перезапуск туннеля"
+echo "    service autossh restart        — перезапуск туннеля"
 echo "    logread | grep autossh         — логи туннеля"
 line

@@ -214,7 +214,7 @@ ssh -J ваш_юзер@xxx.xxx.xx.xx root@localhost -p 2222
 ```sh
 echo 'ssh-ed25519 AAAA... server-to-openwrt' >> /etc/dropbear/authorized_keys
 chmod 600 /etc/dropbear/authorized_keys
-/etc/init.d/dropbear reload
+service dropbear reload
 ```
 
 ---
@@ -224,7 +224,7 @@ chmod 600 /etc/dropbear/authorized_keys
 **На роутере:**
 
 ```sh
-/etc/init.d/autossh restart      # перезапустить туннель
+service autossh restart          # перезапустить туннель
 logread | grep autossh           # логи
 pgrep -f autossh                 # процесс запущен?
 cat /etc/config/autossh          # текущая конфигурация
