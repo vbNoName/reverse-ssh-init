@@ -74,13 +74,7 @@ read tmp </dev/tty
 # 5. Перезапись конфигурации autossh
 echo "⚙️ Обновление конфигурации /etc/config/autossh..."
 
-printf "config autossh\n\
-        option cls '0'\n\
-        option monitor '0'\n\
-        option poll '60'\n\
-        option gatetime '30'\n\
-        option ssh '-i /root/.ssh/id_dropbear -N -R %s:localhost:22 -p %s %s@%s'\n" \
-        "$REMOTE_PORT" "$SERVER_PORT" "$SERVER_USER" "$SERVER_IP" > /etc/config/autossh
+printf "config autossh\n        option cls '0'\n        option monitor '0'\n        option poll '60'\n        option gatetime '30'\n        option ssh '-i /root/.ssh/id_dropbear -N -R %s:localhost:22 -p %s %s@%s'\n" "$REMOTE_PORT" "$SERVER_PORT" "$SERVER_USER" "$SERVER_IP" > /etc/config/autossh
 
 # 6. Включение автозапуска и запуск с новыми настройками
 echo "🔄 Запуск службы autossh с новыми параметрами..."
