@@ -69,19 +69,18 @@ dropbearkey -y -f "$SSH_KEY" | grep -E "^ssh-rsa"
 echo "--------------------------------------------------------"
 
 printf "Нажмите [Enter] ПОСЛЕ ТОГО, как проверите ключ на сервере..."
-read tmp
+read tmp </dev/tty
 
 # 5. Перезапись конфигурации autossh
 echo "⚙️ Обновление конфигурации /etc/config/autossh..."
-# 👇 ЗДЕСЬ: добавляем одинарные кавычки вокруг 'EOF'
-cat << 'EOF' > /etc/config/autossh
-config autossh
-        option cls '0'
-        option monitor '0'
-        option poll '60'
-        option gatetime '30'
-        option ssh '-i /root/.ssh/id_dropbear -N -R ${REMOTE_PORT}:localhost:22 -p ${SERVER_PORT} ${SERVER_USER}@${SERVER_IP}'
-EOF
+
+printf "config autossh\n\
+        option cls '0'\n\
+        option monitor '0'\n\
+        option poll '60'\n\
+        option gatetime '30'\n\
+        option ssh '-i /root/.ssh/id_dropbear -N -R %s:localhost:22 -p %s %s@%s'\n" \
+        "$REMOTE_PORT" "$SERVER_PORT" "$SERVER_USER" "$SERVER_IP" > /etc/config/autossh
 
 # 6. Включение автозапуска и запуск с новыми настройками
 echo "🔄 Запуск службы autossh с новыми параметрами..."
