@@ -69,7 +69,7 @@ dropbearkey -y -f "$SSH_KEY" | grep -E "^ssh-rsa"
 echo "--------------------------------------------------------"
 
 printf "Нажмите [Enter] ПОСЛЕ ТОГО, как проверите ключ на сервере..."
-read tmp </dev/tty
+read tmp
 
 # 5. Перезапись конфигурации autossh
 echo "⚙️ Обновление конфигурации /etc/config/autossh..."
