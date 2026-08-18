@@ -1,214 +1,258 @@
-# Полное руководство по настройке обратного SSH-туннеля для OpenWRT
+# 🔌 Обратный SSH-туннель для OpenWRT
 
-Эта инструкция описывает три способа организации удаленного доступа к роутеру OpenWRT, находящемуся за серым IP (NAT). Во всех сценариях роутер сам инициирует соединение и «пробрасывает» свой порт управления на сервер с постоянным IP-адресом.
+Удалённый доступ к роутеру **OpenWRT**, который находится за NAT / серым IP.
 
----
+Роутер сам инициирует соединение с сервером, у которого есть постоянный публичный IP,
+и «пробрасывает» на него свой SSH-порт. `autossh` держит туннель постоянно и
+автоматически переподключается при обрывах связи.
 
-## 🏗️ Общая подготовка инфраструктуры
-
-Перед реализацией любого из способов необходимо выполнить базовую настройку сервера и роутера.
-
-### Шаг 1. Подготовка сервера с постоянным IP-адресом
-
-Чтобы сервер мог перенаправлять порты для обратного туннеля, измените настройки SSH-демона.
-
-1. Откройте конфигурационный файл SSH-сервера:
-
-   ```bash
-   sudo nano /etc/ssh/sshd_config
-   ```
-2. Найдите и активируйте (удалите символ #, если он есть) следующие строки:
-
-   ```text
-   GatewayPorts yes
-   AllowTcpForwarding yes
-   ```
-3. Перезапустите службу SSH:
-
-   ```bash
-   sudo systemctl restart ssh
-   ```
-
-### Шаг 2. Настройка авторизации по ключам (на OpenWRT)
-
-Авторизация по паролю не подходит для автоматизации. Настроим SSH-ключи Dropbear.
-
-1. Подключитесь к роутеру OpenWRT и сгенерируйте SSH-ключ:
-
-   ```bash
-   dropbearkey -t rsa -f ~/.ssh/id_dropbear
-   ```
-2. Выведите созданный публичный ключ на экран:
-
-   ```bash
-   dropbearkey -y -f ~/.ssh/id_dropbear
-   ```
-3. Скопируйте строку с ключом (начинается с ssh-rsa ...) и добавьте её на вашем сервере с постоянным IP-адресом в файл \~/.ssh/authorized_keys.
+```
+┌──────────────┐        обратный туннель        ┌──────────────────┐
+│   OpenWRT    │ ─────────────────────────────► │  Сервер (VPS)    │
+│  за NAT      │   R 2222:localhost:22          │  публичный IP    │
+│  порт 22     │                                │  порт 2222       │
+└──────────────┘                                └──────────────────┘
+                                                         ▲
+                                                         │ ssh root@localhost -p 2222
+                                                      вы здесь
+```
 
 ---
 
-## 🛠️ Способ 1. Постоянный туннель (Всегда онлайн) — Рекомендуемый
+## 📋 Что понадобится
 
-Самый надежный подход. Роутер поднимает туннель при загрузке и поддерживает его 24/7. При обрыве связи утилита autossh автоматически переподключит туннель.
+| Компонент | Требования |
+|---|---|
+| Сервер | Постоянный публичный IP, OpenSSH, root/sudo |
+| Роутер | OpenWRT с доступом в интернет, пакет `autossh` (установит скрипт) |
 
-1. Установите необходимые пакеты на OpenWRT:
+---
+
+## 1️⃣ Настройка сервера
+
+Выполняется **один раз**. Все команды — на сервере с постоянным IP.
+
+### 1.1. Создайте пользователя для туннеля
+
+Отдельный пользователь (например `openwrt`) нужен, чтобы роутер не имел доступа
+к чему-либо, кроме проброса порта.
+
+```bash
+sudo useradd -m -s /usr/sbin/nologin openwrt
+sudo mkdir -p /home/openwrt/.ssh
+sudo touch /home/openwrt/.ssh/authorized_keys
+sudo chmod 700 /home/openwrt/.ssh
+sudo chmod 600 /home/openwrt/.ssh/authorized_keys
+sudo chown -R openwrt:openwrt /home/openwrt/.ssh
+```
+
+> ℹ️ Оболочка `nologin` — это нормально: туннель поднимается с флагом `-N`,
+> интерактивная сессия ему не нужна. Пароль пользователю не задаётся вовсе,
+> вход будет только по ключу.
+
+### 1.2. Настройте sshd
+
+Откройте конфигурацию SSH-сервера:
+
+```bash
+sudo vi /etc/ssh/sshd_config
+```
+
+Убедитесь, что заданы (раскомментируйте или добавьте) следующие параметры:
+
+```text
+# Разрешить проброс портов — нужно для обратного туннеля
+AllowTcpForwarding yes
+
+# Обычные пользователи могут входить и по паролю, и по ключу
+PasswordAuthentication yes
+PubkeyAuthentication yes
+```
+
+А **в самый конец файла** добавьте блок, который ограничивает пользователя туннеля
+входом только по ключу:
+
+```text
+# Пользователь туннеля OpenWRT — только ключ, никаких паролей и шелла
+Match User openwrt
+    PasswordAuthentication no
+    KbdInteractiveAuthentication no
+    PubkeyAuthentication yes
+    PermitTTY no
+    X11Forwarding no
+    AllowTcpForwarding remote
+```
+
+> ⚠️ Блоки `Match` действуют до конца файла, поэтому размещать их нужно строго
+> последними — иначе ограничения применятся ко всем пользователям.
+
+Проверьте конфигурацию и перезапустите службу:
+
+```bash
+sudo sshd -t && sudo systemctl restart ssh
+```
+
+### 1.3. Сгенерируйте ключ для входа на роутер (опционально)
+
+Этот ключ нужен, чтобы **с сервера заходить на роутер через туннель без пароля**.
+Вход по паролю на роутере при этом остаётся включённым — из локальной сети роутера
+можно будет по-прежнему логиниться без ключа.
+
+Выполните под тем пользователем, от имени которого будете подключаться к роутеру
+(обычно ваш обычный пользователь на сервере, **не** `openwrt`):
+
+```bash
+ssh-keygen -t ed25519 -C "server-to-openwrt"
+```
+
+На все вопросы можно нажать `Enter` (без пароля на ключ — иначе он будет
+запрашиваться при каждом подключении).
+
+Выведите публичный ключ и скопируйте строку целиком — она понадобится
+на шаге 2, скрипт установки её запросит:
+
+```bash
+cat ~/.ssh/id_ed25519.pub
+```
+
+```text
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA... server-to-openwrt
+```
+
+> ℹ️ Если ключ уже есть — просто используйте существующий `~/.ssh/id_ed25519.pub`.
+
+
+<details>
+<summary>🌍 Опционально: доступ к туннелю не только с самого сервера</summary>
+
+По умолчанию проброшенный порт слушает только `localhost` сервера — это
+безопасно, подключаться нужно, предварительно зайдя на сервер по SSH.
+
+Если нужно подключаться к роутеру напрямую извне (`ssh root@СЕРВЕР -p 2222`),
+добавьте в `/etc/ssh/sshd_config`:
+
+```text
+GatewayPorts yes
+```
+
+и не забудьте закрыть порт `2222` файрволом для всех, кроме доверенных адресов.
+
+</details>
+
+---
+
+## 2️⃣ Настройка роутера (одна команда)
+
+Подключитесь к роутеру по SSH и выполните — скрипт скачается и сразу запустится:
+
+```sh
+sh <(wget -O - https://raw.githubusercontent.com/vbNoName/reverse-ssh-init/refs/heads/main/setup_autossh.sh) <USER> <SERVER_IP> <SERVER_PORT> <REMOTE_PORT>
+```
+
+Подставьте свои значения:
+
+| Аргумент | Описание | По умолчанию |
+|---|---|---|
+| `<USER>` | Пользователь на сервере (из шага 1.1) | — (обязательный) |
+| `<SERVER_IP>` | IP-адрес или домен сервера | — (обязательный) |
+| `<SERVER_PORT>` | SSH-порт сервера | `22` |
+| `<REMOTE_PORT>` | Порт туннеля на сервере | `2222` |
+
+**Готовый пример** — замените только IP:
+
+```sh
+sh <(wget -O - https://raw.githubusercontent.com/vbNoName/reverse-ssh-init/refs/heads/main/setup_autossh.sh) openwrt xxx.xxx.xx.xx 22 2222
+```
+
+### Что делает скрипт
+
+1. Устанавливает `autossh`, если его нет.
+2. Останавливает старый туннель (скрипт можно запускать повторно для смены настроек).
+3. Генерирует ключ `dropbear` в `/root/.ssh/id_dropbear` (существующий переиспользуется).
+4. **Показывает публичный ключ и ждёт `Enter`** — в этот момент нужно добавить ключ
+   на сервер в `/home/openwrt/.ssh/authorized_keys`:
 
    ```bash
-   opkg update && opkg install autossh
+   echo 'ssh-rsa AAAA...' | sudo tee -a /home/openwrt/.ssh/authorized_keys
    ```
-2. Откройте файл конфигурации autossh на роутере:
+5. **Запрашивает публичный ключ сервера** (из шага 1.3) и добавляет его
+   в `/etc/dropbear/authorized_keys` роутера — чтобы вход через туннель шёл без пароля.
+   Шаг необязательный: нажмите `Enter`, чтобы пропустить. Вход по паролю
+   (`PasswordAuth`, `RootPasswordAuth`) остаётся включённым в любом случае.
+6. Записывает `/etc/config/autossh`.
+7. Добавляет сервер в `known_hosts` роутера.
+8. Включает автозапуск и стартует службу.
 
-   ```bash
-   nano /etc/config/autossh
-   ```
-3. Замените содержимое файла следующим конфигом:
+---
 
-   ```text
-   config autossh
-           option cls '0'
-           option monitor '0'
-           option poll '60'
-           option gatetime '30'
-           option ssh '-i /root/.ssh/id_dropbear -N -R 2222:localhost:22 -p 22 user@IP_СЕРВЕРА'
-   ```
+## 3️⃣ Подключение к роутеру
 
-   Где user — имя пользователя на сервере, а IP\_СЕРВЕРА — его постоянный IP.
-4. Включите автозапуск и запустите службу:
-
-   ```bash
-   /etc/init.d/autossh enable
-   /etc/init.d/autossh start
-   ```
-
-Как подключиться к роутеру: Зайдите на сервер с постоянным IP по SSH и выполните:
+Зайдите на сервер по SSH и оттуда:
 
 ```bash
 ssh root@localhost -p 2222
 ```
 
----
-
-## 🤖 Способ 2. Запуск туннеля через Telegram-бота (По запросу)
-
-Туннель создается только после того, как вы отправите команду /start вашему персональному Telegram-боту.
-
-1. Установите зависимости на OpenWRT:
-
-   ```bash
-   opkg update && opkg install curl ca-bundle autossh
-   ```
-2. Создайте файл скрипта /root/tg_bot.sh:
-
-   ```bash
-   touch /root/tg_bot.sh && chmod +x /root/tg_bot.sh
-   nano /root/tg_bot.sh
-   ```
-3. Вставьте следующий код, указав свои данные (Токен бота и ваш личный Chat ID для безопасности):
-
-   ```bash
-   #!/bin/sh
-   
-   TOKEN="ВАШ_ТОКЕН_БОТА"
-   MY_CHAT_ID="ВАШ_ЛИЧНЫЙ_CHAT_ID"
-   SERVER_USER="user"                   
-   SERVER_IP="IP_СЕРВЕРА"     
-   REMOTE_PORT="2222"
-   REMOTE_TARGET_PORT="22"                   
-   
-   OFFSET=0
-   
-   while true; do
-       RESPONSE=$(curl -s "https://telegram.org")
-       UPDATE_ID=$(echo "$RESPONSE" | grep -o '"update_id":[0-9]*' | tail -n 1 | cut -d: -f2)
-       CHAT_ID=$(echo "$RESPONSE" | grep -o '"chat":{"id":[0-9\-]*' | tail -n 1 | cut -d: -f3)
-       TEXT=$(echo "$RESPONSE" | grep -o '"text":"[^"]*' | tail -n 1 | cut -d'"' -f4)
-   
-       if [ ! -z "$UPDATE_ID" ]; then
-           OFFSET=$((UPDATE_ID + 1))
-   
-           if [ "$CHAT_ID" = "$MY_CHAT_ID" ]; then
-               if [ "$TEXT" = "/start" ]; then
-                   curl -s -X POST "https://telegram.org" -d "chat_id=$CHAT_ID&text=Инициализирую туннель..."
-                   if pgrep autossh > /dev/null; then
-                       curl -s -X POST "https://telegram.org" -d "chat_id=$CHAT_ID&text=Туннель уже активен!"
-                   else
-                       autossh -M 0 -f -i /root/.ssh/id_dropbear -N -R ${REMOTE_PORT}:localhost:22 -p ${REMOTE_TARGET_PORT} ${SERVER_USER}@${SERVER_IP}
-                       curl -s -X POST "https://telegram.org" -d "chat_id=$CHAT_ID&text=Туннель запущен. Порт: ${REMOTE_PORT}"
-                   fi
-               elif [ "$TEXT" = "/stop" ]; then
-                   pkill autossh
-                   pkill -f "dropbear"
-                   curl -s -X POST "https://telegram.org" -d "chat_id=$CHAT_ID&text=Туннель остановлен."
-               fi
-           fi
-       fi
-       sleep 1
-   done
-   ```
-4. Для настройки автозапуска бота добавьте в файл /etc/rc.local перед строкой exit 0:
-
-   ```text
-   /root/tg_bot.sh &
-   ```
-
-Как подключиться к роутеру: Отправьте боту команду /start, после чего подключитесь через сервер с постоянным IP командой ssh root@localhost -p 2222.
-
----
-
-## 🚪 Способ 3. Подключение «по стуку» (Port Knocking)
-
-Роутер находится в режиме ожидания. Вы отправляете скрытый пакетный сигнал («стук») на порты сервера с постоянным IP, сервер создает триггер, а роутер, проверяя сервер по расписанию, автоматически поднимает туннель.
-
-### Настройка на стороне сервера с постоянным IP:
-
-1. Установите демон knockd:
-
-   ```bash
-   sudo apt update && sudo apt install knockd
-   ```
-2. В файле /etc/knockd.conf задайте секретную последовательность портов (например: 7000, 8000, 9000):
-
-   ```text
-   [options]
-           UseSyslog
-   
-   [openSSH]
-           sequence    = 7000,8000,9000
-           seq_timeout = 5
-           start_command = echo "open" > /tmp/router_trigger
-           cmd_timeout   = 10
-           stop_command  = echo "close" > /tmp/router_trigger
-   ```
-3. Запустите службу: sudo systemctl enable knockd && sudo systemctl start knockd.
-
-### Настройка на стороне OpenWRT:
-
-1. Создайте скрипт проверки /root/check_knock.sh:
-
-   ```bash
-   #!/bin/sh
-   STATUS=$(ssh -i /root/.ssh/id_dropbear user@IP_СЕРВЕРА "cat /tmp/router_trigger 2>/dev/null")
-   
-   if [ "$STATUS" = "open" ]; then
-       if ! pgrep autossh > /dev/null; then
-           autossh -M 0 -f -i /root/.ssh/id_dropbear -N -R 2222:localhost:22 -p 22 user@IP_СЕРВЕРА
-       fi
-   elif [ "$STATUS" = "close" ]; then
-       pkill autossh
-       pkill -f "dropbear"
-   fi
-   ```
-2. Сделайте его исполняемым: chmod +x /root/check_knock.sh.
-3. Добавьте проверку в планировщик Cron (crontab -e), чтобы скрипт проверял сервер каждую минуту:
-
-   ```text
-   * * * * * /root/check_knock.sh
-   ```
-
-Как подключиться к роутеру: Отправьте последовательность стуков на сервер (например, с помощью утилиты knock или мобильного приложения):
+Или одной строкой с локальной машины:
 
 ```bash
-knock IP_СЕРВЕРА 7000 8000 9000
+ssh -J ваш_юзер@xxx.xxx.xx.xx root@localhost -p 2222
 ```
 
-В течение минуты роутер считает статус open с сервера и поднимет туннель на порт 2222.
+Если на шаге 1.3 был добавлен ключ сервера — пароль не спросят. Если ключ пропущен
+или используется другой ключ, роутер запросит пароль `root`.
+
+**Как аутентифицируется роутер**
+
+| Откуда | Способ входа |
+|---|---|
+| Через туннель (с сервера) | Ключ, если добавлен; иначе пароль |
+| Из локальной сети роутера | Пароль или ключ — оба варианта работают |
+
+Добавить ключ сервера на роутер позже, не запуская скрипт заново:
+
+```sh
+echo 'ssh-ed25519 AAAA... server-to-openwrt' >> /etc/dropbear/authorized_keys
+chmod 600 /etc/dropbear/authorized_keys
+/etc/init.d/dropbear reload
+```
+
+---
+
+## 🩺 Диагностика
+
+**На роутере:**
+
+```sh
+/etc/init.d/autossh restart      # перезапустить туннель
+logread | grep autossh           # логи
+pgrep -f autossh                 # процесс запущен?
+cat /etc/config/autossh          # текущая конфигурация
+cat /etc/dropbear/authorized_keys   # ключи для входа на роутер
+uci show dropbear                   # включён ли вход по паролю
+```
+
+Проверить подключение вручную (покажет реальную ошибку авторизации):
+
+```sh
+dbclient -i /root/.ssh/id_dropbear -p 22 openwrt@xxx.xxx.xx.xx -N
+```
+
+**На сервере:**
+
+```bash
+ss -tlnp | grep 2222             # порт туннеля слушается?
+sudo journalctl -u ssh -n 50     # логи sshd
+```
+
+### Частые проблемы
+
+| Симптом | Причина / решение |
+|---|---|
+| `Permission denied (publickey)` | Ключ не добавлен в `authorized_keys` или неверные права (`700` на `.ssh`, `600` на файл) |
+| Порт на сервере не слушается | В `sshd_config` не включён `AllowTcpForwarding yes` |
+| `remote port forwarding failed` | Порт уже занят «зависшим» туннелем: `sudo ss -tlnp \| grep 2222` и убить процесс |
+| Туннель падает и не поднимается | Смотрите `logread \| grep autossh`; проверьте `option poll` и связь роутера с интернетом |
+| Соединение «висит» после разрыва | Добавьте на сервер `ClientAliveInterval 30` и `ClientAliveCountMax 3` |
+| Роутер через туннель просит пароль | Ключ сервера не попал в `/etc/dropbear/authorized_keys`, либо права на файл не `600` |
+| Не пускает по паролю из локальной сети | Проверьте `uci show dropbear` — должны быть `PasswordAuth=on` и `RootPasswordAuth=on` |
