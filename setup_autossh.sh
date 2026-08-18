@@ -73,7 +73,8 @@ read tmp
 
 # 5. Перезапись конфигурации autossh
 echo "⚙️ Обновление конфигурации /etc/config/autossh..."
-cat << EOF > /etc/config/autossh
+# 👇 ЗДЕСЬ: добавляем одинарные кавычки вокруг 'EOF'
+cat << 'EOF' > /etc/config/autossh
 config autossh
         option cls '0'
         option monitor '0'
