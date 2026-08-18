@@ -71,21 +71,27 @@ echo "--------------------------------------------------------"
 printf "Нажмите [Enter] ПОСЛЕ ТОГО, как проверите ключ на сервере..."
 read tmp </dev/tty
 
-# 5. Перезапись конфигурации autossh
+# 5. Перезапись конфигурации autossh (в одну строку, чтобы избежать ошибок синтаксического анализа)
 echo "⚙️ Обновление конфигурации /etc/config/autossh..."
-
 printf "config autossh\n        option cls '0'\n        option monitor '0'\n        option poll '60'\n        option gatetime '30'\n        option ssh '-i /root/.ssh/id_dropbear -N -R %s:localhost:22 -p %s %s@%s'\n" "$REMOTE_PORT" "$SERVER_PORT" "$SERVER_USER" "$SERVER_IP" > /etc/config/autossh
 
 # 6. Включение автозапуска и запуск с новыми настройками
 echo "🔄 Запуск службы autossh с новыми параметрами..."
 /etc/init.d/autossh enable
-/etc/init.d/autossh start
+/etc/init.d/autossh restart
 
 # 7. Проверка подключения (интерактивная верификация хоста)
 echo "🔒 Выполняю тестовое подключение для верификации хоста."
 echo "Если появится запрос '(y/n)', введите 'y' и нажмите Enter."
-echo "Если вы запускаете скрипт повторно и сервер не менялся, запрос не появится."
-dbclient -i "$SSH_KEY" -p "$SERVER_PORT" "${SERVER_USER}@${SERVER_IP}" "exit"
+
+# Использован флаг -N и запуск в фоне, чтобы проверка успешно проходила
+# даже для безопасных пользователей с оболочкой /sbin/nologin
+dbclient -i "$SSH_KEY" -p "$SERVER_PORT" -N "${SERVER_USER}@${SERVER_IP}" &
+DB_PID=$!
+sleep 2
+kill $DB_PID > /dev/null 2>&1
 
 echo "✅ Все настройки успешно применены!"
-echo "Роутер доступен на сервере по команде: ssh root@localhost -p ${REMOTE_PORT}"
+
+# Вывод через printf в одинарных кавычках гарантирует отсутствие синтаксических ошибок в ash
+printf 'Роутер доступен на сервере по команде: ssh root@localhost -p %s\n' "$REMOTE_PORT"
