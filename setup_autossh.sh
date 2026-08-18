@@ -156,10 +156,15 @@ echo "⚙️  Записываю конфигурацию $AUTOSSH_CONFIG..."
 cat > "$AUTOSSH_CONFIG" <<EOF
 config autossh
 	option cls '0'
-	option monitor '0'
+	# monitorport '0' полностью отключает мониторинг autossh через служебный порт.
+	# ВАЖНО: опция называется именно monitorport — 'monitor' игнорируется, и autossh
+	# берёт дефолтный порт 20000, из-за чего рвёт туннель каждые poll+poll/4 секунд.
+	option monitorport '0'
 	option poll '60'
-	option gatetime '30'
-	option ssh '-i $SSH_KEY -N -y -R $REMOTE_PORT:localhost:22 -p $SERVER_PORT $SERVER_USER@$SERVER_IP'
+	# gatetime '0' — не сдаваться, если ssh упал сразу после старта.
+	option gatetime '0'
+	# -K 30: keepalive от dbclient, чтобы NAT провайдера не убивал простаивающий туннель.
+	option ssh '-i $SSH_KEY -N -y -K 30 -R $REMOTE_PORT:localhost:22 -p $SERVER_PORT $SERVER_USER@$SERVER_IP'
 EOF
 
 # ── 7. Доверие хосту (known_hosts) ──────────────────────────────────────────

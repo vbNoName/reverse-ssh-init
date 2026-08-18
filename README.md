@@ -67,6 +67,11 @@ AllowTcpForwarding yes
 # Обычные пользователи могут входить и по паролю, и по ключу
 PasswordAuthentication yes
 PubkeyAuthentication yes
+
+# Быстро освобождать порт туннеля после обрыва связи с роутером
+ClientAliveInterval 30
+ClientAliveCountMax 3
+TCPKeepAlive yes
 ```
 
 А **в самый конец файла** добавьте блок, который ограничивает пользователя туннеля
@@ -253,6 +258,38 @@ sudo journalctl -u ssh -n 50     # логи sshd
 | Порт на сервере не слушается | В `sshd_config` не включён `AllowTcpForwarding yes` |
 | `remote port forwarding failed` | Порт уже занят «зависшим» туннелем: `sudo ss -tlnp \| grep 2222` и убить процесс |
 | Туннель падает и не поднимается | Смотрите `logread \| grep autossh`; проверьте `option poll` и связь роутера с интернетом |
+| **Выбрасывает из сессии каждые ~75 секунд**, в логе `timeout polling to accept read connection` → `port down, restarting ssh` | Мониторинг autossh не отключён. Опция называется **`monitorport`**, а не `monitor` — с неверным именем autossh берёт дефолтный порт 20000 и рвёт туннель каждые `poll + poll/4` секунд. Нужно `option monitorport '0'` (см. ниже) |
+| Туннель молча отваливается при простое | NAT провайдера забывает соединение — добавьте `-K 30` в `option ssh` и `ClientAliveInterval 30` на сервере |
+| autossh совсем перестал перезапускаться | `option gatetime '30'`: если ssh упал в первые 30 с, autossh завершается. Поставьте `gatetime '0'` |
 | Соединение «висит» после разрыва | Добавьте на сервер `ClientAliveInterval 30` и `ClientAliveCountMax 3` |
 | Роутер через туннель просит пароль | Ключ сервера не попал в `/etc/dropbear/authorized_keys`, либо права на файл не `600` |
 | Не пускает по паролю из локальной сети | Проверьте `uci show dropbear` — должны быть `PasswordAuth=on` и `RootPasswordAuth=on` |
+
+### Эталонный `/etc/config/autossh`
+
+Скрипт пишет именно такой конфиг — с ним можно сверить существующий:
+
+```text
+config autossh
+        option cls '0'
+        option monitorport '0'
+        option poll '60'
+        option gatetime '0'
+        option ssh '-i /root/.ssh/id_dropbear -N -y -K 30 -R 2222:localhost:22 -p 22 openwrt@xxx.xxx.xx.xx'
+```
+
+| Параметр | Зачем |
+|---|---|
+| `monitorport '0'` | Отключает служебный мониторинг autossh. **Критично**: при значении по умолчанию (20000) туннель перезапускается каждые ~75 с |
+| `gatetime '0'` | Не сдаваться, если ssh упал сразу после старта |
+| `poll '60'` | Интервал проверки соединения |
+| `-K 30` | Keepalive от `dbclient` — держит соединение живым через NAT |
+| `-y` | Автоматически доверять хост-ключу сервера при первом подключении |
+| `-N` | Не запускать шелл — только проброс порта |
+
+После правки руками:
+
+```sh
+service autossh restart
+logread | grep autossh | tail -20     # не должно быть 'port down, restarting ssh'
+```
