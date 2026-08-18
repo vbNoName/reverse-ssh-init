@@ -46,7 +46,7 @@ fi
 # 2. Остановка старого туннеля (если скрипт запускается повторно)
 if [ -f "/etc/init.d/autossh" ]; then
     echo "🔄 Останавливаю текущую службу autossh для обновления настроек..."
-    /etc/init.d/autossh stop > /dev/null 2>&1
+    service autossh stop > /dev/null 2>&1
     pkill autossh > /dev/null 2>&1
 fi
 
@@ -71,27 +71,27 @@ echo "--------------------------------------------------------"
 printf "Нажмите [Enter] ПОСЛЕ ТОГО, как проверите ключ на сервере..."
 read tmp </dev/tty
 
-# 5. Перезапись конфигурации autossh (в одну строку, чтобы избежать ошибок синтаксического анализа)
+# 5. Перезапись конфигурации autossh
 echo "⚙️ Обновление конфигурации /etc/config/autossh..."
-printf "config autossh\n        option cls '0'\n        option monitor '0'\n        option poll '60'\n        option gatetime '30'\n        option ssh '-i /root/.ssh/id_dropbear -N -R %s:localhost:22 -p %s %s@%s'\n" "$REMOTE_PORT" "$SERVER_PORT" "$SERVER_USER" "$SERVER_IP" > /etc/config/autossh
+# Флаг -y в параметрах ssh заставит autossh автоматически доверять серверу при первом старте
+printf "config autossh\n        option cls '0'\n        option monitor '0'\n        option poll '60'\n        option gatetime '30'\n        option ssh '-i /root/.ssh/id_dropbear -N -y -R %s:localhost:22 -p %s %s@%s'\n" "$REMOTE_PORT" "$SERVER_PORT" "$SERVER_USER" "$SERVER_IP" > /etc/config/autossh
 
 # 6. Включение автозапуска и запуск с новыми настройками
 echo "🔄 Запуск службы autossh с новыми параметрами..."
-/etc/init.d/autossh enable
-/etc/init.d/autossh restart
+service autossh enable
+service autossh start
 
-# 7. Проверка подключения (интерактивная верификация хоста)
-echo "🔒 Выполняю тестовое подключение для верификации хоста."
-echo "Если появится запрос '(y/n)', введите 'y' и нажмите Enter."
-
-# Использован флаг -N и запуск в фоне, чтобы проверка успешно проходила
-# даже для безопасных пользователей с оболочкой /sbin/nologin
-dbclient -i "$SSH_KEY" -p "$SERVER_PORT" -N "${SERVER_USER}@${SERVER_IP}" &
+# 7. Проверка подключения (с флагом автоматического добавления в known_hosts)
+echo "🔒 Выполняю автоматическое добавление сервера в trusted hosts..."
+dbclient -y -i "$SSH_KEY" -p "$SERVER_PORT" -N "${SERVER_USER}@${SERVER_IP}" >/dev/null 2>&1 &
 DB_PID=$!
 sleep 2
 kill $DB_PID > /dev/null 2>&1
 
 echo "✅ Все настройки успешно применены!"
 
-# Вывод через printf в одинарных кавычках гарантирует отсутствие синтаксических ошибок в ash
-printf 'Роутер доступен на сервере по команде: ssh root@localhost -p %s\n' "$REMOTE_PORT"
+# Выводим финальный блок информации без кавычек во избежание конфликтов парсинга в ash
+cat << 'INFO'
+Роутер доступен на сервере. Для подключения выполните на сервере команду:
+ssh root@localhost -p 2222
+INFO
